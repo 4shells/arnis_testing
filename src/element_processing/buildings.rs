@@ -1263,12 +1263,6 @@ fn generate_roof(
                     )
                 },
             );
-            dbg!(element.nodes.get(0).unwrap().x);
-            dbg!(element.nodes.get(0).unwrap().z);
-            dbg!(sin_cos_slope_direction);
-            dbg!(roof_direction);
-            dbg!(max_projection);
-            dbg!(min_projection);
 
             // Skillion roof - single sloping surface
             let building_size = (max_projection-min_projection) as i32;
