@@ -791,6 +791,9 @@ fn generate_roof(
     // Optional OSM hint for ridge orientation
     let roof_orientation = element.tags.get("roof:orientation").map(|s| s.as_str());
 
+    // Optional roof direction (currently only implemented for Skillion)
+    let roof_direction = element.tags.get("roof:direction").map(|s| s.as_str());
+    
     match roof_type {
         RoofType::Flat => {
             // Simple flat roof
@@ -1211,9 +1214,64 @@ fn generate_roof(
         }
 
         RoofType::Skillion => {
+            // Parse the roof:direction=* tag
+            let default_roof_direction:f32 = 0.0; //TODO: Implement "along"/"across" option for skillion, and make "along" the default
+            let slope_direction_deg:f32 = match roof_direction{
+                Some(direction) if direction.eq_ignore_ascii_case("N") => 0.0,
+                Some(direction) if direction.eq_ignore_ascii_case("NNE") => 22.5,
+                Some(direction) if direction.eq_ignore_ascii_case("NE") => 45.0,
+                Some(direction) if direction.eq_ignore_ascii_case("ENE") => 67.5,
+                Some(direction) if direction.eq_ignore_ascii_case("E") => 90.0,
+                Some(direction) if direction.eq_ignore_ascii_case("ESE") => 112.5,
+                Some(direction) if direction.eq_ignore_ascii_case("SE") => 135.0,
+                Some(direction) if direction.eq_ignore_ascii_case("SSE") => 157.5,
+                Some(direction) if direction.eq_ignore_ascii_case("S") => 180.0,
+                Some(direction) if direction.eq_ignore_ascii_case("SSW") => 202.5,
+                Some(direction) if direction.eq_ignore_ascii_case("SW") => 225.0,
+                Some(direction) if direction.eq_ignore_ascii_case("WSW") => 247.5,
+                Some(direction) if direction.eq_ignore_ascii_case("W") => 270.0,
+                Some(direction) if direction.eq_ignore_ascii_case("WNW") => 292.5,
+                Some(direction) if direction.eq_ignore_ascii_case("NW") => 315.0,
+                Some(direction) if direction.eq_ignore_ascii_case("NNW") => 337.5,
+                Some(direction) if direction.eq_ignore_ascii_case("north") => 0.0,
+                Some(direction) if direction.eq_ignore_ascii_case("east") => 90.0,
+                Some(direction) if direction.eq_ignore_ascii_case("south") => 180.0,
+                Some(direction) if direction.eq_ignore_ascii_case("west") => 270.0,
+                Some(direction) => direction.parse::<f32>().unwrap_or(default_roof_direction).rem_euclid(360.0),
+                _ => default_roof_direction,
+
+            };
+
+            // Find the closest compass direction for stairs facing the right way
+            let stair_direction = match slope_direction_deg {
+                a if a >= 315.0 || a < 45.0  => StairFacing::South,
+                a if a >= 45.0  && a < 135.0 => StairFacing::West,
+                a if a >= 135.0 && a < 225.0 => StairFacing::North,
+                _                                 => StairFacing::East,
+            };
+
+            // We want to find furtherst points in the direction of roof_direction
+            // This is the projection of each node's position onto the roof direction vector            
+            let sin_cos_slope_direction = ((slope_direction_deg).to_radians()).sin_cos();
+            let (max_projection, min_projection) = element.nodes.iter().fold(
+                (f32::MIN, f32::MAX),
+                |(max_projection, min_projection), n| {
+                    let projection= -n.x as f32 * sin_cos_slope_direction.0 + n.z as f32 * sin_cos_slope_direction.1;
+                    (
+                        max_projection.max(projection),
+                        min_projection.min(projection),
+                    )
+                },
+            );
+            dbg!(element.nodes.get(0).unwrap().x);
+            dbg!(element.nodes.get(0).unwrap().z);
+            dbg!(sin_cos_slope_direction);
+            dbg!(roof_direction);
+            dbg!(max_projection);
+            dbg!(min_projection);
+
             // Skillion roof - single sloping surface
-            let width = (max_x - min_x).max(1);
-            let building_size = (max_x - min_x).max(max_z - min_z);
+            let building_size = (max_projection-min_projection) as i32;
 
             // Scale roof height based on building size (4-10 blocks)
             let max_roof_height = (building_size / 3).clamp(4, 10);
@@ -1229,7 +1287,8 @@ fn generate_roof(
             // First pass: calculate all roof heights
             let mut roof_heights = std::collections::HashMap::new();
             for &(x, z) in floor_area {
-                let slope_progress = (x - min_x) as f64 / width as f64;
+                let projection = -x as f32 * sin_cos_slope_direction.0 + z as f32 * sin_cos_slope_direction.1;
+                let slope_progress = (projection - min_projection) as f64 / (max_projection-min_projection) as f64;
                 let roof_height = base_height + (slope_progress * max_roof_height as f64) as i32;
                 roof_heights.insert((x, z), roof_height);
             }
@@ -1255,7 +1314,7 @@ fn generate_roof(
                             let stair_block_material = get_stair_block_for_material(roof_block);
                             let stair_block_with_props = create_stair_with_properties(
                                 stair_block_material,
-                                StairFacing::East,
+                                stair_direction,
                                 StairShape::Straight,
                             );
                             editor.set_block_with_properties_absolute(
